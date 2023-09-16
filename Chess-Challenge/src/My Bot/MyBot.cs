@@ -8,10 +8,11 @@ public class MCTSNode
 {
     public static double explorationWeight = 1.0f; // Determines how much we want to explore unvisited nodes vs. exploiting visited nodes
     public Move action; // The move that lead to this node
-    public Dictionary<Move, MCTSNode> children; // The children of this node
+    public List<MCTSNode> children; // The children of this node
     public MCTSNode parent; // The parent of this node
     public int numberOfTimesVisited; // The number of times this node has been visited
     public double averageValue; // The average value of this node
+
 
     /* 
      * The UCB is a function that determines how valuable it would be to
@@ -24,12 +25,13 @@ public class MCTSNode
             return averageValue + explorationWeight * Math.Sqrt(logNParent / numberOfTimesVisited);
     } }
 
-    public MCTSNode(Move action, Dictionary<Move, MCTSNode> children, MCTSNode parent, int numberOfTimesVisited)
+    public MCTSNode(Move action, List<MCTSNode> children, MCTSNode parent, int numberOfTimesVisited, float averageValue)
     {
         this.action = action;
         this.children = children;
         this.parent = parent;
         this.numberOfTimesVisited = numberOfTimesVisited;
+        this.averageValue = averageValue;
     }
 }
 
@@ -42,28 +44,40 @@ public class MyBot : IChessBot
 
     public Move Think(Board board, Timer timer)
     {
-        _random = new();
+        _rootNode = new MCTSNode(Move.NullMove, new(), null, 0, 0);
+        _random = new Random();
+        return RunMCTS(board, timer, 10000);
+        /*_random = new();
         Move[] moves = board.GetLegalMoves();
-        return moves[_random.Next(moves.Length)];
+        return moves[_random.Next(moves.Length)];*/
     }
 
-    private void RunMCTS(Board board, Timer timer, int timeForTurn)
+    //TODO: Determine how much time we should spend on this turn
+    private Move RunMCTS(Board board, Timer timer, int timeForTurn)
     {
         while (timer.MillisecondsElapsedThisTurn < timeForTurn)
         {
-            MCTSNode selectedNode = Select(_rootNode, board);
+            Select(_rootNode, board);
         }
+
+        _rootNode.children.Sort(CompareMCTSNodes);
+        return _rootNode.children[0].action;
     }
 
-    private MCTSNode Select(MCTSNode currentNode, Board board)
+    private float Select(MCTSNode currentNode, Board board)
     {
         Move[] moves = board.GetLegalMoves();
+
+        if (moves.Length < currentNode.children.Count)
+        {
+            Console.WriteLine("We've got a problem");
+        }
         if (moves.Length == currentNode.children.Count)
         {
-            MCTSNode bestNode = currentNode.children.First().Value;
+            MCTSNode bestNode = currentNode.children[0];
             double bestUCB = bestNode.UCB;
 
-            foreach (MCTSNode node in currentNode.children.Values)
+            foreach (MCTSNode node in currentNode.children)
             {
                 double nodeUCB = node.UCB;
 
@@ -73,15 +87,54 @@ public class MyBot : IChessBot
                     bestUCB = nodeUCB;
                 }
             }
+
             board.MakeMove(bestNode.action);
-            var selectedNode = Select(bestNode, board);
+            bestNode.numberOfTimesVisited++;
+
+            var possibleOpponentMoves = new List<Move>(board.GetLegalMoves());
+
+            var opponentMove = possibleOpponentMoves[_random.Next(possibleOpponentMoves.Count())];
+
+            MCTSNode opponentMoveNode = null;
+
+            foreach (MCTSNode expandedMove in bestNode.children)
+            {
+                if (expandedMove.action == opponentMove)
+                {
+                    opponentMoveNode = expandedMove;
+                    break;
+                }
+            }
+
+            opponentMoveNode = opponentMoveNode != null ? opponentMoveNode : new MCTSNode(opponentMove, new(), bestNode, 1, 0);
+
+            bestNode.children.Add(opponentMoveNode);
+
+            board.MakeMove(opponentMoveNode.action);
+            opponentMoveNode.numberOfTimesVisited++;
+
+            var averageValue = Select(bestNode, board);
+
+            opponentMoveNode.averageValue = 1 - averageValue;
+
+            bestNode.averageValue = bestNode.averageValue + 1 / bestNode.numberOfTimesVisited * (averageValue - bestNode.averageValue);
+
+            board.UndoMove(opponentMoveNode.action);
+
             board.UndoMove(bestNode.action);
-            return selectedNode;
+            return averageValue;
         }
         else
         {
-            var allMoves = board.GetLegalMoves();
-            var expandMove = allMoves[_random.NextInt64(allMoves.Length)];
+            var allMoves = new List<Move>(moves);
+
+            if (allMoves.Count() == 0)
+                return board.IsInCheckmate() ? 100000 : 0;
+
+            foreach (MCTSNode expandedNode in currentNode.children)
+                allMoves.Remove(expandedNode.action);
+
+            var expandMove = allMoves[_random.Next(allMoves.Count)];
 
             float totalFitness = 0;
             board.MakeMove(expandMove);
@@ -89,11 +142,13 @@ public class MyBot : IChessBot
             for (int i = 0; i < NUM_ROLLOUTS; i++)
                 totalFitness += Simulate(board);
 
-            currentNode.children.Add(expandMove, new MCTSNode(expandMove, new(), currentNode, 1));
+            currentNode.children.Add(new MCTSNode(expandMove, new(), currentNode, 1, totalFitness));
 
+            // TODO: Backpropogate
+            // Q(s,a) should be the result divided by numberOfTimesVisited
             board.UndoMove(expandMove);
 
-            return currentNode;
+            return totalFitness;
         }
     }
 
@@ -133,5 +188,10 @@ public class MyBot : IChessBot
         }
 
         return fitness;
+    }
+
+    private int CompareMCTSNodes(MCTSNode node1, MCTSNode node2)
+    {
+        return node1.averageValue.CompareTo(node2.averageValue);
     }
 }
