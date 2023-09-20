@@ -39,14 +39,18 @@ public class MyBot : IChessBot
 {
     private MCTSNode _rootNode;
     private Random _random;
-    private const int NUM_ROLLOUTS = 1;
-    private const int SIMULATION_DEPTH = 1;
+    private int _movesExpanded;
+    private bool _isPlayerWhite;
+    private const int NUM_ROLLOUTS = 20;
+    private const int SIMULATION_DEPTH = 20;
+    private readonly int[] PIECE_WEIGHTS = { 1, 3, 3, 5, 9, 0, 1, 3, 3, 5, 9 };
 
     public Move Think(Board board, Timer timer)
     {
+        _isPlayerWhite = board.IsWhiteToMove;
         _rootNode = new MCTSNode(Move.NullMove, new(), null, 0, 0);
         _random = new Random();
-        return RunMCTS(board, timer, 10000);
+        return RunMCTS(board, timer, 100);
         /*_random = new();
         Move[] moves = board.GetLegalMoves();
         return moves[_random.Next(moves.Length)];*/
@@ -60,7 +64,8 @@ public class MyBot : IChessBot
             Select(_rootNode, board);
         }
 
-        _rootNode.children.Sort(CompareMCTSNodes);
+        _rootNode.children.Sort(ReverseCompareMCTSNodes);
+        Console.WriteLine("Moves Expanded: {0}, Final Weight: {1}", _movesExpanded, _rootNode.children[0].averageValue);
         return _rootNode.children[0].action;
     }
 
@@ -68,12 +73,14 @@ public class MyBot : IChessBot
     {
         Move[] moves = board.GetLegalMoves();
 
-        if (moves.Length < currentNode.children.Count)
-        {
-            Console.WriteLine("We've got a problem");
-        }
+        currentNode.numberOfTimesVisited++;
         if (moves.Length == currentNode.children.Count)
         {
+            if (moves.Length == 0)
+            {
+                return 0f;
+            }
+
             MCTSNode bestNode = currentNode.children[0];
             double bestUCB = bestNode.UCB;
 
@@ -93,6 +100,14 @@ public class MyBot : IChessBot
 
             var possibleOpponentMoves = new List<Move>(board.GetLegalMoves());
 
+            if (possibleOpponentMoves.Count() == 0)
+            {
+                board.UndoMove(bestNode.action);
+
+                bestNode.averageValue = bestNode.averageValue + 1 / bestNode.numberOfTimesVisited * (1 - bestNode.averageValue);
+                return 1;
+            }
+
             var opponentMove = possibleOpponentMoves[_random.Next(possibleOpponentMoves.Count())];
 
             MCTSNode opponentMoveNode = null;
@@ -106,14 +121,17 @@ public class MyBot : IChessBot
                 }
             }
 
-            opponentMoveNode = opponentMoveNode != null ? opponentMoveNode : new MCTSNode(opponentMove, new(), bestNode, 1, 0);
+            if (opponentMoveNode == null)
+            {
+                opponentMoveNode = new MCTSNode(opponentMove, new(), bestNode, 1, 0);
 
-            bestNode.children.Add(opponentMoveNode);
+                bestNode.children.Add(opponentMoveNode);
+            }
 
             board.MakeMove(opponentMoveNode.action);
             opponentMoveNode.numberOfTimesVisited++;
 
-            var averageValue = Select(bestNode, board);
+            var averageValue = Select(opponentMoveNode, board);
 
             opponentMoveNode.averageValue = 1 - averageValue;
 
@@ -128,11 +146,11 @@ public class MyBot : IChessBot
         {
             var allMoves = new List<Move>(moves);
 
-            if (allMoves.Count() == 0)
-                return board.IsInCheckmate() ? 100000 : 0;
-
             foreach (MCTSNode expandedNode in currentNode.children)
                 allMoves.Remove(expandedNode.action);
+
+            if (allMoves.Count() == 0)
+                return CalculateFitness(board);
 
             var expandMove = allMoves[_random.Next(allMoves.Count)];
 
@@ -142,10 +160,9 @@ public class MyBot : IChessBot
             for (int i = 0; i < NUM_ROLLOUTS; i++)
                 totalFitness += Simulate(board);
 
+            _movesExpanded++;
             currentNode.children.Add(new MCTSNode(expandMove, new(), currentNode, 1, totalFitness));
 
-            // TODO: Backpropogate
-            // Q(s,a) should be the result divided by numberOfTimesVisited
             board.UndoMove(expandMove);
 
             return totalFitness;
@@ -179,19 +196,31 @@ public class MyBot : IChessBot
 
     private float CalculateFitness(Board board)
     {
+
+        if (board.IsInCheckmate())
+            return board.IsWhiteToMove != _isPlayerWhite ? 1 : -1;
+
+        if (board.IsDraw())
+            return 0;
+
         var pieceLists = board.GetAllPieceLists();
         float fitness = 0;
 
-        for (int i = 0; i < pieceLists.Length; i++)
+        for (int i = 0; i < 6; i++)
         {
-            fitness += i < 8 ? pieceLists[i].Count : -pieceLists[i].Count;
+            fitness += _isPlayerWhite ? pieceLists[i].Count() * PIECE_WEIGHTS[i] : -pieceLists[i].Count() * PIECE_WEIGHTS[i];
         }
 
-        return fitness;
+        for (int i = 7; i < pieceLists.Length - 1; i++)
+        {
+            fitness += _isPlayerWhite ? -pieceLists[i].Count() * PIECE_WEIGHTS[i] : pieceLists[i].Count() * PIECE_WEIGHTS[i];
+        }
+
+        return fitness / 39;
     }
 
-    private int CompareMCTSNodes(MCTSNode node1, MCTSNode node2)
+    private int ReverseCompareMCTSNodes(MCTSNode node1, MCTSNode node2)
     {
-        return node1.averageValue.CompareTo(node2.averageValue);
+        return -node1.averageValue.CompareTo(node2.averageValue);
     }
 }
