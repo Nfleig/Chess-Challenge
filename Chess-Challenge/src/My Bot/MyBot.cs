@@ -50,16 +50,8 @@ public class MyBot : IChessBot
         _isPlayerWhite = board.IsWhiteToMove;
         _rootNode = new MCTSNode(Move.NullMove, new(), null, 0, 0);
         _random = new Random();
-        return RunMCTS(board, timer, 100);
-        /*_random = new();
-        Move[] moves = board.GetLegalMoves();
-        return moves[_random.Next(moves.Length)];*/
-    }
 
-    //TODO: Determine how much time we should spend on this turn
-    private Move RunMCTS(Board board, Timer timer, int timeForTurn)
-    {
-        while (timer.MillisecondsElapsedThisTurn < timeForTurn)
+        while (timer.MillisecondsElapsedThisTurn < 100)
         {
             Select(_rootNode, board);
         }
@@ -133,7 +125,7 @@ public class MyBot : IChessBot
 
             var averageValue = Select(opponentMoveNode, board);
 
-            opponentMoveNode.averageValue = 1 - averageValue;
+            opponentMoveNode.averageValue = -averageValue;
 
             bestNode.averageValue = bestNode.averageValue + 1 / bestNode.numberOfTimesVisited * (averageValue - bestNode.averageValue);
 
@@ -196,9 +188,14 @@ public class MyBot : IChessBot
 
     private float CalculateFitness(Board board)
     {
+        bool isOurTurn = board.IsWhiteToMove == _isPlayerWhite;
+
+        // The color of the player whose turn it is (player or opponent)
+        // 1 for white, -1 for black
+        int playerColor = board.IsWhiteToMove ? 1 : -1;
 
         if (board.IsInCheckmate())
-            return board.IsWhiteToMove != _isPlayerWhite ? 1 : -1;
+            return !isOurTurn ? 1 : -1;
 
         if (board.IsDraw())
             return 0;
@@ -208,15 +205,18 @@ public class MyBot : IChessBot
 
         for (int i = 0; i < 6; i++)
         {
-            fitness += _isPlayerWhite ? pieceLists[i].Count() * PIECE_WEIGHTS[i] : -pieceLists[i].Count() * PIECE_WEIGHTS[i];
+            fitness += pieceLists[i].Count() * PIECE_WEIGHTS[i] * playerColor;
         }
 
         for (int i = 7; i < pieceLists.Length - 1; i++)
         {
-            fitness += _isPlayerWhite ? -pieceLists[i].Count() * PIECE_WEIGHTS[i] : pieceLists[i].Count() * PIECE_WEIGHTS[i];
+            fitness += pieceLists[i].Count() * PIECE_WEIGHTS[i] * -playerColor;
         }
 
-        return fitness / 39;
+        // Normalize the piece score based on the maximum possible piece value
+        fitness /= 39;
+
+        return isOurTurn ? fitness : -fitness;
     }
 
     private int ReverseCompareMCTSNodes(MCTSNode node1, MCTSNode node2)
